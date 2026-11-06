@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Caveduck編輯器
 // @namespace    https://caveduck.io/
-// @version      1.5
+// @version      1.6
 // @description  可將 Google Sheet 兩欄／三欄（TSV）貼上併匯入，也可將現有欄位內容匯出成可貼回試算表的格式。支援關鍵字書（基礎＋快捷指令＋翻譯）、小工具介面和骰子預設。
 // @author       @lyre273
 // @homepage     https://lyre-projects.pages.dev/
@@ -947,15 +947,36 @@
       try { const arr = JSON.parse(msg); if (Array.isArray(arr)) return arr.map((e) => `${(e.path || []).join('.')}：${e.message}`).join('；'); } catch (_) {  }
       return String(msg).slice(0, 160);
     },
-    async api(method, path, body) {
-      const r = await fetch(this.API + path, { method, credentials: 'include', cache: 'no-store', headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
-      const txt = await r.text(); let data = null; try { data = JSON.parse(txt); } catch (_) {  }
-      if (!r.ok) {
-        const e0 = data && data.errors && data.errors[0];
-        const msg = e0 && e0.msg ? this.zodMsg(e0.msg) : (data && data.error && data.error.message) || txt.replace(/<[^>]+>/g, ' ').trim().slice(0, 120);
-        throw new Error(`${method} ${path || '/'} 回 ${r.status}：${msg}`);
+    WRITE_LIMIT: 5, WRITE_WINDOW: 60000, writeTimes: [],
+    async throttle(method, log) {
+      if (method !== 'POST' && method !== 'PUT') return;
+      const now = Date.now();
+      this.writeTimes = this.writeTimes.filter((x) => now - x < this.WRITE_WINDOW);
+      if (this.writeTimes.length >= this.WRITE_LIMIT) {
+        const wait = this.writeTimes[0] + this.WRITE_WINDOW + 1500 - now;
+        if (wait > 0) { if (log) log(`網站每分鐘只收 ${this.WRITE_LIMIT} 次新增／更新，等 ${Math.ceil(wait / 1000)} 秒後繼續…`); await sleep(wait); }
+        this.writeTimes = this.writeTimes.filter((x) => Date.now() - x < this.WRITE_WINDOW);
       }
-      return data;
+      this.writeTimes.push(Date.now());
+    },
+    async api(method, path, body, log) {
+      for (let attempt = 0; ; attempt++) {
+        await this.throttle(method, log);
+        const r = await fetch(this.API + path, { method, credentials: 'include', cache: 'no-store', headers: body ? { 'content-type': 'application/json' } : undefined, body: body ? JSON.stringify(body) : undefined });
+        const txt = await r.text(); let data = null; try { data = JSON.parse(txt); } catch (_) {  }
+        if (r.status === 429 && attempt < 3) {
+          const ra = parseInt(r.headers.get('retry-after') || '60', 10) || 60;
+          if (log) log(`網站說寫入太頻繁（429），等 ${ra} 秒後重試…`);
+          await sleep((ra + 1) * 1000);
+          this.writeTimes = []; continue;
+        }
+        if (!r.ok) {
+          const e0 = data && data.errors && data.errors[0];
+          const msg = e0 && e0.msg ? this.zodMsg(e0.msg) : (data && data.error && data.error.message) || (data && data.code) || txt.replace(/<[^>]+>/g, ' ').trim().slice(0, 120);
+          throw new Error(`${method} ${path || '/'} 回 ${r.status}：${msg}`);
+        }
+        return data;
+      }
     },
     async fetchAll() { return ((await this.api('GET', '')) || {}).items || []; },
     row(it) { return [it.id, it.title, this.normNotation(it.config.notation), this.MODE_OUT[it.config.mode] || it.config.mode, it.config.interval, it.config.condition, it.config.instructions, it.is_public ? '是' : '否']; },
@@ -1046,9 +1067,17 @@
         else action = 'create';
         rows.push({ d, target, note, errs, action, fields });
       }
+      for (const r of rows) {
+        if (r.action === 'error' || !r.target || r.target.title === r.d.title) continue;
+        const others = (byTitle.get(r.d.title) || []).filter((e) => e.id !== r.target.id);
+        if (!others.length) continue;
+        r.errs.push(`id ${r.target.id} 現在叫「${r.target.title}」，而「${r.d.title}」已經是 id ${others.map((e) => e.id).join('／')}：id 欄可能錯位，請核對後再貼`);
+        r.action = 'error'; r.fields = [];
+      }
       const leftover = existing.filter((e) => !used.has(e.id));
       const cnt = (k) => rows.filter((r) => r.action === k).length;
-      return { rows, leftover, existing, counts: { create: cnt('create'), update: cnt('update'), same: cnt('same'), error: cnt('error'), leftover: leftover.length } };
+      const writes = cnt('create') + rows.filter((r) => r.action === 'update' && r.fields.some((f) => f !== 'is_public')).length;
+      return { rows, leftover, existing, writes, counts: { create: cnt('create'), update: cnt('update'), same: cnt('same'), error: cnt('error'), leftover: leftover.length } };
     },
     async apply(p, opts, log) {
       const res = { created: [], updated: [], deleted: [], failed: [], reordered: false, finalIds: [] };
@@ -1059,23 +1088,24 @@
         const body = { title: r.d.title, config: { notation: c.notation, mode: c.mode, interval: c.interval, condition: c.condition, instructions: c.instructions } };
         try {
           if (r.action === 'create') {
-            const out = await this.api('POST', '', body); const it = (out && out.item) || out;
+            const out = await this.api('POST', '', body, log); const it = (out && out.item) || out;
             if (!it || it.id == null) throw new Error('新增後沒拿到 id');
             r.newId = it.id; ids.push(it.id); res.created.push(r.d.title); log(`＋ 新增「${r.d.title}」→ id ${it.id}`);
-            if (r.d.is_public) { await this.api('PATCH', `/${it.id}/share`, { is_public: 1 }); log('  設為公開'); }
+            if (r.d.is_public) { await this.api('PATCH', `/${it.id}/share`, { is_public: 1 }, log); log('  設為公開'); }
           } else if (r.action === 'update') {
             ids.push(r.target.id);
             const cfg = r.fields.filter((f) => f !== 'is_public');
-            if (cfg.length) { await this.api('PUT', `/${r.target.id}`, body); log(`✎ 更新「${r.d.title}」(id ${r.target.id})：${cfg.map((f) => this.ZH[f]).join('、')}`); }
-            if (r.fields.includes('is_public')) { await this.api('PATCH', `/${r.target.id}/share`, { is_public: r.d.is_public }); log(`  公開 → ${r.d.is_public ? '是' : '否'}`); }
+            if (cfg.length) { await this.api('PUT', `/${r.target.id}`, body, log); log(`✎ 更新「${r.d.title}」(id ${r.target.id})：${cfg.map((f) => this.ZH[f]).join('、')}`); }
+            if (r.fields.includes('is_public')) { await this.api('PATCH', `/${r.target.id}/share`, { is_public: r.d.is_public }, log); log(`  公開 → ${r.d.is_public ? '是' : '否'}`); }
             res.updated.push(r.d.title);
           } else ids.push(r.target.id);
         } catch (e) { res.failed.push(`「${r.d.title}」${e.message}`); log('✗ ' + r.d.title + '：' + e.message); if (r.target) ids.push(r.target.id); }
-        await sleep(200);
+        await sleep(300);
       }
+      if (res.failed.length) { log(`⚠ 有 ${res.failed.length} 列沒寫成，這次不刪清單外、也不重排；修好後再按一次匯入`); res.finalIds = ids.concat(p.leftover.map((e) => e.id)); return res; }
       if (opts.deleteOthers) {
         for (const e of p.leftover) {
-          try { await this.api('DELETE', `/${e.id}`); res.deleted.push(e.title); log(`－ 刪除「${e.title}」(id ${e.id})`); }
+          try { await this.api('DELETE', `/${e.id}`, null, log); res.deleted.push(e.title); log(`－ 刪除「${e.title}」(id ${e.id})`); }
           catch (err) { res.failed.push(`刪除「${e.title}」${err.message}`); log('✗ 刪除失敗 ' + e.title + '：' + err.message); ids.push(e.id); }
           await sleep(200);
         }
@@ -1083,8 +1113,14 @@
       res.finalIds = ids;
       if (opts.reorder) {
         const cur = p.existing.map((e) => e.id);
-        if (!res.created.length && !res.deleted.length && ids.join(',') === cur.join(',')) log('順序沒變，不用重排');
-        else { await this.api('POST', '/reorder', { ids }); res.reordered = true; log('↕ 已照貼上的順序排好（清單外的接在最後）'); }
+        if (!res.created.length && !res.deleted.length && ids.join(',') === cur.join(',')) { log('順序沒變，不用重排'); return res; }
+        for (let k = 0; k < 2; k++) {
+          const now = (await this.fetchAll()).map((e) => e.id);
+          const want = ids.filter((id) => now.includes(id)).concat(now.filter((id) => !ids.includes(id)));
+          if (want.join(',') === now.join(',')) { log('順序已經跟貼上的一樣，不用重排'); res.finalIds = want; break; }
+          try { await this.api('POST', '/reorder', { ids: want }, log); res.reordered = true; res.finalIds = want; log('↕ 已照貼上的順序排好（清單外的接在最後）'); break; }
+          catch (e) { if (k === 0 && /409/.test(e.message)) { log('排序時清單變了，重抓再試一次…'); await sleep(800); continue; } throw e; }
+        }
       }
       return res;
     },
@@ -1130,7 +1166,8 @@
         ['套用貼上的順序', '照貼上的列序重排，貼上內容沒提到的骰子接在最後'],
         ['刪除清單外的骰子', '貼上內容沒提到的骰子會被刪掉，按匯入時會再確認一次；刪了救不回來'],
         ['匯出到剪貼簿', '把這頁所有骰子輸出成上述 8 欄的 TSV，第一列是欄位名稱，可直接貼進 Google Sheet'],
-        ['⚠', '這頁沒有儲存鈕，匯入直接寫進網站；存完網站會在背景重新編譯結果判定（幾十秒），列表要重新整理才看得到'],
+        ['速度', '網站每分鐘只收 5 次新增／更新（第 6 次起會被擋 60 秒），工具會自己等；一次改很多顆就要等幾分鐘，中途別關頁面'],
+        ['⚠', '這頁沒有儲存鈕，匯入直接寫進網站；存完網站會在背景重新編譯結果判定（幾十秒），列表要重新整理才看得到<br>有任何一列沒寫成，這次就不刪清單外、不重排，修好再匯入一次'],
       ]
       : isShort
       ? [
@@ -1247,6 +1284,8 @@
         const reorderNeeded = opts.reorder && !orderSame(p);
         if (!p.counts.create && !p.counts.update && !opts.deleteOthers && !reorderNeeded) { log('內容都一樣，沒東西要改'); return; }
         const body = [`新增 ${p.counts.create} 顆、更新 ${p.counts.update} 顆${reorderNeeded ? '、套用貼上的順序' : ''}`];
+        const mins = Math.max(0, Math.ceil(p.writes / Dice.WRITE_LIMIT) - 1);
+        if (mins) body.push(`網站每分鐘只收 ${Dice.WRITE_LIMIT} 次新增／更新，這批 ${p.writes} 次約要等 ${mins} 分鐘，中途別關頁面`);
         if (opts.deleteOthers) body.push(`刪除清單外 ${p.leftover.length} 顆：${p.leftover.map((e) => e.title).join('、')}`);
         const ok = await confirmBox({
           title: opts.deleteOthers ? '即將寫入並刪除骰子' : '即將寫入骰子', body: body.join('\n'),
