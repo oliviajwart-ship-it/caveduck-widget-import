@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Caveduck編輯器
 // @namespace    https://caveduck.io/
-// @version      1.4
+// @version      1.5
 // @description  可將 Google Sheet 兩欄／三欄（TSV）貼上併匯入，也可將現有欄位內容匯出成可貼回試算表的格式。支援關鍵字書（基礎＋快捷指令＋翻譯）、小工具介面和骰子預設。
 // @author       @lyre273
 // @homepage     https://lyre-projects.pages.dev/
@@ -35,6 +35,7 @@
   const ICON_FOLD = SVG('<path d="m6 9 6 6 6-6"/>', 16);
   const ICON_GRIP = SVG('<path d="M4 9h16"/><path d="M4 15h16"/>', 14);
   const ICON_INFO = SVG('<circle cx="12" cy="12" r="9"/><path d="M12 7.5v5"/><path d="M12 16h.01"/>', 15);
+  const ICON_DICE = SVG('<rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8" cy="8" r="1.2" fill="currentColor"/><circle cx="16" cy="8" r="1.2" fill="currentColor"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/><circle cx="8" cy="16" r="1.2" fill="currentColor"/><circle cx="16" cy="16" r="1.2" fill="currentColor"/>', 22);
   const infoBtn = (id) => `<button type="button" id="${id}" title="說明" style="display:flex;align-items:center;justify-content:center;width:20px;height:20px;padding:0;border:0;background:none;color:${C.ink2};cursor:pointer;">${ICON_INFO}</button>`;
   const helpBox = (rows) => `<div style="margin-bottom:10px;padding:9px 11px;background:${C.field};border:1px solid ${C.line};border-radius:8px;font-size:12px;line-height:1.7;color:${C.ink2};">`
     + rows.map(([k, v]) => `<div style="margin:2px 0;"><b style="color:${C.ink};">${k}</b>　${v}</div>`).join('') + '</div>';
@@ -1103,11 +1104,6 @@
       if (pending) log(`網站正在背景重新整理 ${pending} 顆骰子的結果判定（會自己跑完，不用等）`);
       return bad;
     },
-    download(name, text, mime) {
-      const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([text], { type: mime })); a.download = name;
-      document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
-    },
-    stamp() { const d = new Date(), p = (x) => String(x).padStart(2, '0'); return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}`; },
   };
 
   function buildPanel(mode, tab) {
@@ -1127,13 +1123,13 @@
       : `<span style="color:${C.ink2};">範圍</span>${check('cd-a', '狀態值(含多語)')}${check('cd-b', '文字')}`;
     const helpRows = isDice
       ? [
-        ['貼上格式', '從 Google Sheet 複製整張表（含第一列欄位名稱）直接貼：id、名稱、骰子類型、觸發方式、每隔N輪、擲骰條件、各結果指示、公開<br>欄位順序不限、可以沒有 id 欄；也吃「下載 JSON 備份」的檔案內容'],
+        ['貼上格式', '從 Google Sheet 複製整張表（含第一列欄位名稱）直接貼：id、名稱、骰子類型、觸發方式、每隔N輪、擲骰條件、各結果指示、公開<br>欄位順序不限、可以沒有 id 欄'],
         ['對應', '有 id 的列對 id 更新；沒 id 的先對名稱（同名唯一才對到），對不到就新增；內容沒變的列不會送出'],
         ['欄位', '骰子類型 1D6／2D6／3D6／1D20／1D100；觸發方式「條件判定」或「每隔N輪」；每隔N輪只能是 1／2／3／5／10／20／30／50／100，留空＝沿用原值；擲骰條件與各結果指示各 200 字（換行也算一字）；公開寫是／否，留空＝沿用原值'],
         ['預覽', '列出每一列要做什麼：新增／更新（哪幾欄變了）／不變／錯誤（哪裡不對）；有錯誤列整批不會跑'],
         ['套用貼上的順序', '照貼上的列序重排，貼上內容沒提到的骰子接在最後'],
         ['刪除清單外的骰子', '貼上內容沒提到的骰子會被刪掉，按匯入時會再確認一次；刪了救不回來'],
-        ['匯出到剪貼簿', '把這頁所有骰子輸出成上述 8 欄的 TSV，第一列是欄位名稱；「下載 JSON 備份」另含網站編譯好的結果判定'],
+        ['匯出到剪貼簿', '把這頁所有骰子輸出成上述 8 欄的 TSV，第一列是欄位名稱，可直接貼進 Google Sheet'],
         ['⚠', '這頁沒有儲存鈕，匯入直接寫進網站；存完網站會在背景重新編譯結果判定（幾十秒），列表要重新整理才看得到'],
       ]
       : isShort
@@ -1186,7 +1182,6 @@
                 : `<button type="button" id="cd-clear" style="${BTN}background:${C.btn};color:${C.btnInk};">清空</button>`}
             </div>
             <button type="button" id="cd-export" style="${BTN}width:100%;margin-top:8px;background:${C.field};color:${C.btnInk};border-color:${C.line};">匯出到剪貼簿</button>
-            ${isDice ? `<button type="button" id="cd-json" style="${BTN}width:100%;margin-top:8px;background:${C.field};color:${C.btnInk};border-color:${C.line};">下載 JSON 備份</button>` : ''}
           </div>
           ${isLore ? `
           <div id="cd-sortbox" style="display:none;">
@@ -1200,7 +1195,7 @@
           <div id="cd-log" style="${LOGBOX}"></div>
         </div>
       </div>
-      <button type="button" id="cd-orb" title="展開" style="display:none;align-items:center;justify-content:center;width:46px;height:46px;padding:0;border:1px solid ${C.line};background:${C.bg};color:${C.primary};border-radius:50%;box-shadow:0 8px 20px rgba(0,0,0,.3);cursor:pointer;">${ICON_ORB}</button>`;
+      <button type="button" id="cd-orb" title="展開" style="display:none;align-items:center;justify-content:center;width:46px;height:46px;padding:0;border:1px solid ${C.line};background:${C.bg};color:${C.primary};border-radius:50%;box-shadow:0 8px 20px rgba(0,0,0,.3);cursor:pointer;">${isDice ? ICON_DICE : ICON_ORB}</button>`;
     document.body.appendChild(wrap);
 
     const $ = (s) => wrap.querySelector(s);
@@ -1211,7 +1206,7 @@
     const clearLog = () => { logBox.innerHTML = ''; logBox.style.display = 'none'; };
     const overwrite = () => (isLore || isShort) && $('#cd-over').checked;
     const setBusy = (on) => {
-      ['#cd-prev', '#cd-run', '#cd-clear', '#cd-export', '#cd-json', '#cd-sort', '#cd-sort-apply'].forEach((id) => {
+      ['#cd-prev', '#cd-run', '#cd-clear', '#cd-export', '#cd-sort', '#cd-sort-apply'].forEach((id) => {
         const el = $(id); if (!el) return;
         el.disabled = on;
         el.style.opacity = on ? '.45' : '';
@@ -1407,16 +1402,6 @@
         done('匯出完成');
       } catch (e) { log('✗ 匯出錯誤：' + e.message); } finally { setBusy(false); }
     };
-    if (isDice) {
-      $('#cd-json').onclick = async () => {
-        clearLog(); setBusy(true); log('讀取中…');
-        try {
-          const items = await Dice.fetchAll();
-          Dice.download(`caveduck-dices-${Dice.stamp()}.json`, JSON.stringify({ format: 'caveduck-dice', version: 1, exported_at: new Date().toISOString(), items }, null, 2), 'application/json;charset=utf-8');
-          done(`已下載 ${items.length} 顆（完整備份，含網站編譯好的結果判定）`);
-        } catch (e) { log('✗ 下載錯誤：' + e.message); } finally { setBusy(false); }
-      };
-    }
 
     const card = $('#cd-card'), orb = $('#cd-orb'), head = $('#cd-head');
     const collapse = (on) => { card.style.display = on ? 'none' : 'block'; orb.style.display = on ? 'flex' : 'none'; };
