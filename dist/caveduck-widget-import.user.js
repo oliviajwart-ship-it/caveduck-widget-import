@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Caveduck編輯器
 // @namespace    https://caveduck.io/
-// @version      1.6
+// @version      1.7
 // @description  可將 Google Sheet 兩欄／三欄（TSV）貼上併匯入，也可將現有欄位內容匯出成可貼回試算表的格式。支援關鍵字書（基礎＋快捷指令＋翻譯）、小工具介面和骰子預設。
 // @author       @lyre273
 // @homepage     https://lyre-projects.pages.dev/
@@ -10,7 +10,7 @@
 // @grant        none
 // @downloadURL  https://raw.githubusercontent.com/oliviajwart-ship-it/caveduck-widget-import/main/dist/caveduck-widget-import.user.js
 // @updateURL    https://raw.githubusercontent.com/oliviajwart-ship-it/caveduck-widget-import/main/dist/caveduck-widget-import.user.js
-// @supportURL   https://github.com/oliviajwart-ship-it/caveduck-widget-import/issues
+// @supportURL   https://lyre-projects.pages.dev/
 // ==/UserScript==
 
 (function () {
@@ -1209,7 +1209,7 @@
           <div id="cd-help" style="display:none;">${helpBox(helpRows)}</div>
           <div id="cd-main">
             ${(isLore || isShort) ? `<div id="cd-stat" style="display:none;margin:0 0 8px;color:${C.ink2};font-size:12.5px;"></div>` : ''}
-            <textarea id="cd-text" placeholder="${isDice ? 'id　名稱　骰子類型　觸發方式　每隔N輪　擲骰條件　各結果指示　公開（第一列是欄位名稱）' : isShort ? '名稱　　提示詞　　說明（Tab 分欄）' : isLore ? '關鍵字1,關鍵字2　　內容（Tab 分欄）' : '狀態值　　文字（Tab 分欄）'}" style="${FIELD('150px')}"></textarea>
+            <textarea id="cd-text" placeholder="${isDice ? 'id　名稱　骰子類型　觸發方式　每隔N輪　擲骰條件　各結果指示　公開（第一列是欄位名稱）' : isShort ? '名稱　　說明　　提示詞（Tab 分欄）' : isLore ? '關鍵字1,關鍵字2　　內容（Tab 分欄）' : '狀態值　　文字（Tab 分欄）'}" style="${FIELD('150px')}"></textarea>
             <div style="margin:10px 0;display:flex;gap:14px;align-items:center;flex-wrap:wrap;">${optionRow}</div>
             <div style="display:flex;gap:8px;">
               <button type="button" id="cd-prev" style="${BTN}background:${C.btn};color:${C.btnInk};">預覽</button>
